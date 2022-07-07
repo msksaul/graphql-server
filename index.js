@@ -1,4 +1,4 @@
-import { ApolloServer, gql, UserInputError } from 'apollo-server'
+import { ApolloServer, AuthenticationError, gql, UserInputError } from 'apollo-server'
 import './db.js'
 import Person from './models/person.js'
 import User from './models/user.js'
@@ -59,6 +59,9 @@ const typeDefinitions = gql`
       username: String!
       password: String!
     ): Token
+    addAsFriend (
+      name: String!
+    ): User
   }
 `
 
@@ -78,10 +81,14 @@ const resolvers = {
     }
   },
   Mutation: {
-    addPerson: async (root, args) => {
+    addPerson: async (root, args, context) => {
+      const {currentUser} = context
+      if (!currentUser) throw new AuthenticationError('not authenticated')
       const person = new Person({...args})
       try {
         await person.save()
+        currentUser.friends = currentUser.friends.concat(person)
+        await currentUser.save()
       }
       catch (error) {
         throw new UserInputError(error.message, {
@@ -129,6 +136,20 @@ const resolvers = {
       return {
         value: jwt.sign(userForToken, JWT_SECRET)
       }
+    },
+    addAsFriend: async (root, args, {currentUser}) => {
+      if (!currentUser) throw new AuthenticationError('not authenticated')
+
+      const person = await Person.findOne({name: args.name})
+
+      const nonFriendlyAlready = (person) => currentUser.friends.map(p => p._id).includes(person._id)
+
+      if (nonFriendlyAlready(person)) {
+        currentUser.friends = currentUser.friends.concat(person)
+        await currentUser.save()
+      }
+
+      return currentUser
     }
   },
   Person: {
