@@ -1,6 +1,10 @@
-import { ApolloServer, gql } from 'apollo-server'
+import { ApolloServer, gql, UserInputError } from 'apollo-server'
 import './db.js'
 import Person from './models/person.js'
+import User from './models/user.js'
+import jwt from 'jsonwebtoken'
+
+const JWT_SECRET = 'asd456ug&/FFG'
 
 const typeDefinitions = gql`
   enum YesNo {
@@ -20,10 +24,21 @@ const typeDefinitions = gql`
     id: ID!
   }
 
+  type User {
+    username: String!
+    friends: [Person]!
+    id: ID!
+  }
+
+  type Token {
+    value: String!
+  }
+
   type Query {
     personCount: Int!
     allPersons(phone: YesNo): [Person]!
     findPerson(name: String!): Person
+    me: User
   }
 
   type Mutation {
@@ -37,6 +52,13 @@ const typeDefinitions = gql`
       name: String!
       phone: String!
     ): Person
+    createUser (
+      username: String!
+    ): User
+    login (
+      username: String!
+      password: String!
+    ): Token
   }
 `
 
@@ -50,17 +72,63 @@ const resolvers = {
     findPerson: async (root, args) => {
       const {name} = args
       return Person.findOne({name})
+    },
+    me: (root, args, context) => {
+      return context.currentUser
     }
   },
   Mutation: {
-    addPerson: (root, args) => {
+    addPerson: async (root, args) => {
       const person = new Person({...args})
-      return person.save()
+      try {
+        await person.save()
+      }
+      catch (error) {
+        throw new UserInputError(error.message, {
+          invalidArgs: args
+        })
+      }
+      return person
     },
     editNumber: async (root, args) => {
       const person = await Person.findOne({name: args.name})
+      if (!person) return null
+
       person.phone = args.phone
-      return person.save()
+      try {
+        await person.save()
+      }
+      catch (error) {
+        throw new UserInputError(error.message, {
+          invalidArgs: args
+        })
+      }
+      return person
+    },
+    createUser: (root, args) => {
+      const user = new User({username: args.username})
+
+      return user.save().catch(error => {
+        throw new UserInputError(error.message, {
+          invalidArgs: args
+        })
+      })
+    },
+    login: async (root, args) => {
+      const user = await User.findOne({username: args.username})
+
+      if (!user || args.password !== 'secret') {
+        throw new UserInputError('wrong credentials')
+      }
+
+      const userForToken = {
+        username: user.username,
+        id: user._id
+      }
+
+      return {
+        value: jwt.sign(userForToken, JWT_SECRET)
+      }
     }
   },
   Person: {
@@ -75,7 +143,16 @@ const resolvers = {
 
 const server = new ApolloServer({
   typeDefs: typeDefinitions,
-  resolvers
+  resolvers,
+  context: async ({req}) => {
+    const auth = req ? req.headers.authorization : null
+    if (auth && auth.toLowerCase().startsWith('bearer')) {
+      const token = auth.substring(7)
+      const {id} = jwt.verify(token, JWT_SECRET)
+      const currentUser = await User.findById(id).populate('friends')
+      return {currentUser}
+    }
+  }
 })
 
 server.listen().then(({url}) => {
