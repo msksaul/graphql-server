@@ -1,10 +1,16 @@
-import { ApolloServer, AuthenticationError, gql, UserInputError } from 'apollo-server'
+import { ApolloServer, AuthenticationError, gql, UserInputError, PubSub } from 'apollo-server'
 import './db.js'
 import Person from './models/person.js'
 import User from './models/user.js'
 import jwt from 'jsonwebtoken'
 
+const pubsub = new PubSub()
+
 const JWT_SECRET = 'asd456ug&/FFG'
+
+const SUBSCRIPTION_EVENTS = {
+  PERSON_ADDED: 'PERSON_ADDED'
+}
 
 const typeDefinitions = gql`
   enum YesNo {
@@ -63,6 +69,10 @@ const typeDefinitions = gql`
       name: String!
     ): User
   }
+  
+  type Subscription {
+    personAdded: Person!
+  }
 `
 
 const resolvers = {
@@ -95,6 +105,7 @@ const resolvers = {
           invalidArgs: args
         })
       }
+      pubsub.publish(SUBSCRIPTION_EVENTS.PERSON_ADDED, {personAdded: person})
       return person
     },
     editNumber: async (root, args) => {
@@ -159,6 +170,11 @@ const resolvers = {
         city: root.city
       }
     }
+  },
+  Subscription: {
+    personAdded: {
+      subscribe: () => pubsub.asyncIterator(SUBSCRIPTION_EVENTS.PERSON_ADDED)
+    }
   }
 }
 
@@ -176,6 +192,7 @@ const server = new ApolloServer({
   }
 })
 
-server.listen().then(({url}) => {
+server.listen().then(({url, subscriptionsUrl}) => {
   console.log(`Serverready at ${url}`)
+  console.log(`Subscriptions ready at ${subscriptionsUrl}`)
 })
